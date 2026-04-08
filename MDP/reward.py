@@ -47,19 +47,8 @@ class Reward:
 
         return total / len(self.video)  
 
-    def compute_temporal_reward(self):
-        indices = [f.index for f in self.state.frames.values()]
-        if len(indices) <= 1:
-            return 0.0
-
-        video_length = len(self.video)
-        std = np.std(indices)
-        max_std = video_length / 2
-        return std / max_std if max_std > 0 else 0.0
-
-    def compute_total_reward(self, w_div=0.4, w_rep=0.4, w_temp=0.2):
+    def compute_total_reward(self, w_div=0.4, w_rep=0.4):
         div  = self.compute_diversity_reward()
         rep  = self.compute_representative_reward()
-        temp = self.compute_temporal_reward()
 
-        return w_div * div + w_rep * rep + w_temp * temp
+        return w_div * div + w_rep * rep 
