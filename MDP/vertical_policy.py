@@ -4,58 +4,41 @@
 from state import State
 from reward import Reward
 from frame import Frame
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
+import numpy as np
+from typing import Tuple
+
+
 class VerticalPolicy(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(VerticalPolicy, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, hidden_size // 2)
-        self.fc3 = nn.Linear(hidden_size // 2, 1) 
-
-    def forward(self, frame_data):
-        out = self.fc1(frame_data)
-        out = self.relu(out)
-        out = self.fc2(out)
-        out = self.relu(out)
-        out = self.fc3(out).squeeze(-1)      
-        return torch.softmax(out, dim=-1)
-    def select_neighbor(self, anchor: Frame, video: dict, window_size: int = 5):
-        video_length = len(video)
-        anchor_idx = anchor.index
-        neighbor_indices = [
-            i for i in range(
-                max(0, anchor_idx - window_size),
-                min(video_length, anchor_idx + window_size + 1)
-            )
-            if i != anchor_idx        
-            and i in video           
-        ]
-
-        if not neighbor_indices:
-            return anchor, None       
-
-        neighbor_frames = [video[i] for i in neighbor_indices]
-        neighbor_data = torch.stack([
-            torch.tensor(f.data, dtype=torch.float32) for f in neighbor_frames
-        ])
-
-        probs = self.forward(neighbor_data)
-        m = torch.distributions.Categorical(probs)
-        action = m.sample()
-
-        selected_frame = neighbor_frames[action.item()]
-        log_prob = m.log_prob(action)
-
-        return selected_frame, log_prob
-    def update_policy(self, log_probs, returns, optimizer):
-        loss = 0.0
-        baseline = np.mean(returns)              
-        for log_prob, G_t in zip(log_probs, returns):
-            loss += -log_prob * (G_t - baseline) 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    def __init__(self, d_model: int, hidden_size: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_model, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, 1)
+        )
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x).squeeze(-1)
+    
+    def select_neighbor(self, anchor_idx: int, contextual_features: np.ndarray, window_size: int) -> Tuple[int, torch.Tensor]:
+        """
+        Returns: (chosen_neighbor_or_anchor_index, log_prob)
+        """
+        T = contextual_features.shape[0]
+        start = max(0, anchor_idx - window_size)
+        end = min(T, anchor_idx + window_size + 1)
+        
+        neighbor_indices = [i for i in range(start, end) if i != anchor_idx]
+        candidates = [anchor_idx] + neighbor_indices  # Keep anchor is always an option
+        
+        cand_feats = torch.tensor(contextual_features[candidates], dtype=torch.float32)
+        logits = self.forward(cand_feats)
+        dist = torch.distributions.Categorical(logits=logits)
+        
+        idx = dist.sample()
+        chosen_idx = candidates[idx.item()]
+        return chosen_idx, dist.log_prob(idx)

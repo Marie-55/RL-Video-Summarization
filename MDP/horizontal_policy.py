@@ -2,48 +2,37 @@
 ### the state as an input and outputs the distribution of probabilities over the frames within the summary(state) to be 
 ### selected as the anchor frame 
 
-from state import State
-from reward import Reward
-from frame import Frame
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
+from typing import List, Tuple
+import numpy as np
+import state as State
 
 class HorizontalPolicy(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(HorizontalPolicy, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, hidden_size // 2)
-        self.fc3 = nn.Linear(hidden_size // 2, 1) 
-
-    def forward(self, frame_data):
-        out = self.fc1(frame_data)
-        out = self.relu(out)
-        out = self.fc2(out)
-        out = self.relu(out)
-        out = self.fc3(out).squeeze(-1)      
-        return torch.softmax(out, dim=-1)    
-
-    def select_anchor(self, state: State):
-        frames = list(state.frames.values())
-        frame_data = torch.stack([
-            torch.tensor(f.data, dtype=torch.float32) for f in frames
-        ])                                          
-
-        probs = self.forward(frame_data)             
-        m = torch.distributions.Categorical(probs)
-        action = m.sample()                         
-        selected_frame = frames[action.item()]
-        log_prob = m.log_prob(action)
-        return selected_frame, log_prob
-
-    def update_policy(self, log_probs, returns, optimizer):
-        loss = 0.0
-        baseline = np.mean(returns)              
-        for log_prob, G_t in zip(log_probs, returns):
-            loss += -log_prob * (G_t - baseline) 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    def __init__(self, d_model: int, hidden_size: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_model, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, 1)
+        )
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (num_candidates, d_model) -> logits: (num_candidates,)
+        return self.net(x).squeeze(-1)
+  
+    def select_anchor(self, summary_features: torch.Tensor, summary_indices: List[int]) -> Tuple[int, torch.Tensor]:
+        """
+        Args:
+            summary_features: (K, d_model) contextual features of currently selected frames
+            summary_indices: corresponding frame indices
+        Returns:
+            (chosen_anchor_index, log_prob)
+        """
+        logits = self.forward(summary_features)
+        dist = torch.distributions.Categorical(logits=logits)
+        idx_in_summary = dist.sample()
+        chosen_idx = summary_indices[idx_in_summary.item()]
+        return chosen_idx, dist.log_prob(idx_in_summary)
