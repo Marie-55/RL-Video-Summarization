@@ -2,7 +2,7 @@
 import torch
 import numpy as np
 from typing import List, Tuple
-from config import Config
+from training.config import Config
 from environment import VideoSummarizationEnv
 from horizontal_policy import HorizontalPolicy
 from vertical_policy import VerticalPolicy
