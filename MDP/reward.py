@@ -47,7 +47,7 @@ class Reward:
 
         return total / len(self.video)  
 
-    def compute_total_reward(self, w_div=0.4, w_rep=0.4):
+    def compute_total_reward(self, w_div=0.5, w_rep=0.5):
         div  = self.compute_diversity_reward()
         rep  = self.compute_representative_reward()
 
