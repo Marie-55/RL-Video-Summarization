@@ -1,11 +1,12 @@
 # trainer.py
 import torch
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from training.config import Config
 from environment import VideoSummarizationEnv
 from horizontal_policy import HorizontalPolicy
 from vertical_policy import VerticalPolicy
+from training.feature_pipeline import FeaturePipeline
 
 def compute_returns(rewards: List[float], gamma: float) -> torch.Tensor:
     R = 0.0
@@ -21,7 +22,9 @@ def train_on_video(
     v_policy: VerticalPolicy,
     opt_h: torch.optim.Optimizer,
     opt_v: torch.optim.Optimizer,
-    config: Config
+    config: Config,
+    pipeline: Optional[FeaturePipeline] = None,
+    opt_transformer: Optional[torch.optim.Optimizer] = None,
 ) -> Tuple[float, List[int]]:
     obs = env.reset()
     
@@ -61,5 +64,17 @@ def train_on_video(
         opt_v.zero_grad()
         loss_v.backward()
         opt_v.step()
+    
+    # --- Transformer Update (if end-to-end training) ---
+    if pipeline is not None and opt_transformer is not None:
+        total_loss = 0.0
+        if log_probs_h:
+            total_loss -= torch.stack(log_probs_h) @ (returns[0::2] - baseline)
+        if log_probs_v:
+            total_loss -= torch.stack(log_probs_v) @ (returns[1::2] - baseline)
+        
+        opt_transformer.zero_grad()
+        total_loss.backward()
+        opt_transformer.step()
         
     return float(returns.sum()), env.get_final_summary()
