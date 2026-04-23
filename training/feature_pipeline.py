@@ -2,8 +2,8 @@
 Feature Pipeline for Temporal Transformer Encoder.
 
 Handles:
-    - Loading raw CNN features
-    - Encoding to contextual features
+    - Loading raw CLIP ViT-L/14 embeddings
+    - Encoding to contextual features via transformer
     - Device management (CPU/GPU)
     - Batch processing
 """
@@ -18,10 +18,6 @@ from transformer.transformer_encoder import TemporalTransformerEncoder
 class FeaturePipeline:
     """
     Manages feature encoding through the temporal transformer.
-    
-    Usage:
-        pipeline = FeaturePipeline(config, device='cuda')
-        contextual_features = pipeline.encode_video(raw_cnn_features)
     """
     
     def __init__(self, config, device: Optional[str] = None):
@@ -55,11 +51,8 @@ class FeaturePipeline:
         return device
     
     def _print_model_summary(self):
-        """Print transformer model summary."""
         total_params = sum(p.numel() for p in self.encoder.parameters())
-        print("=" * 55)
         print("  Temporal Transformer Encoder")
-        print("=" * 55)
         print(f"  Input dimension    : {self.config.transformer_input_dim}")
         print(f"  Output dimension   : {self.config.transformer_d_model}")
         print(f"  Attention heads    : {self.config.transformer_nhead}")
@@ -67,57 +60,67 @@ class FeaturePipeline:
         print(f"  FFN hidden size    : {self.config.transformer_dim_feedfwd}")
         print(f"  Total parameters   : {total_params:,}")
         print(f"  Device             : {self.device}")
-        print("=" * 55)
     
     def encode_video(
         self,
         features: Union[torch.Tensor, np.ndarray],
         padding_mask: Optional[torch.Tensor] = None,
-    ) -> np.ndarray:
+        training: bool = False,
+    ) -> Union[np.ndarray, torch.Tensor]:
         """
-        Encode raw CNN features to contextual features for a single video.
+        Encode CLIP features to contextual features for a single video.
         
         Args:
-            features: (T, 1024) raw CNN features
+            features: (T, 768) CLIP ViT-L/14 embeddings
                       - Can be torch.Tensor or np.ndarray
             padding_mask: (T,) optional mask for padded frames
+            training: If True, run in train mode and return a Tensor with
+                      gradients (for end-to-end training). If False (default),
+                      run in eval/no_grad mode and return a numpy array.
             
         Returns:
-            contextual_features: (T, 512) numpy array
+            contextual_features:
+                - (T, 512) numpy array  when training=False
+                - (T, 512) torch.Tensor when training=True  (gradients attached)
         """
         # Convert to tensor if needed
         if isinstance(features, np.ndarray):
             features = torch.from_numpy(features).float()
         
         # Add batch dimension
-        features = features.unsqueeze(0)  # (1, T, 1024)
+        features = features.unsqueeze(0)  # (1, T, 768)
         features = features.to(self.device)
         
         if padding_mask is not None:
             padding_mask = padding_mask.unsqueeze(0).to(self.device)  # (1, T)
         
-        # Encode
-        self.encoder.eval()
-        with torch.no_grad():
+        if training:
+            # Train mode: keep gradients so the transformer can be updated
+            self.encoder.train()
             contextual_features = self.encoder.encode(features, padding_mask)  # (1, T, 512)
-        
-        # Remove batch dimension and convert to numpy
-        contextual_features = contextual_features.squeeze(0)  # (T, 512)
-        contextual_features = contextual_features.cpu().numpy()
-        
-        return contextual_features
+            contextual_features = contextual_features.squeeze(0)  # (T, 512)
+            return contextual_features  # Tensor with grad_fn
+        else:
+            # Inference / RL-only mode: no gradients needed
+            self.encoder.eval()
+            with torch.no_grad():
+                contextual_features = self.encoder.encode(features, padding_mask)  # (1, T, 512)
+            contextual_features = contextual_features.squeeze(0).cpu().numpy()  # (T, 512)
+            return contextual_features
     
     def encode_batch(
         self,
         feature_list: list,
         padding_masks: Optional[list] = None,
+        training: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Encode a batch of videos (variable-length).
         
         Args:
-            feature_list: list of (T_i, 1024) tensors/arrays
+            feature_list: list of (T_i, 768) tensors/arrays
             padding_masks: optional list of (T_i,) masks
+            training: If True, run in train mode with gradients attached.
             
         Returns:
             padded_contextual: (B, T_max, 512) numpy array
@@ -130,13 +133,16 @@ class FeaturePipeline:
         padded_features = padded_features.to(self.device)
         batch_mask = batch_mask.to(self.device)
         
-        # Encode
-        self.encoder.eval()
-        with torch.no_grad():
+        if training:
+            self.encoder.train()
             contextual_features = self.encoder.encode(padded_features, batch_mask)  # (B, T_max, 512)
+        else:
+            self.encoder.eval()
+            with torch.no_grad():
+                contextual_features = self.encoder.encode(padded_features, batch_mask)  # (B, T_max, 512)
         
         # Convert to numpy
-        contextual_features = contextual_features.cpu().numpy()
+        contextual_features = contextual_features.cpu().numpy() if not training else contextual_features
         batch_mask = batch_mask.cpu().numpy()
         
         return contextual_features, batch_mask
@@ -149,7 +155,6 @@ class FeaturePipeline:
         print(f"[FeaturePipeline] Checkpoint saved to {path}")
     
     def load_checkpoint(self, path: Union[str, Path]):
-        """Load transformer checkpoint."""
         path = Path(path)
         self.encoder.load_state_dict(torch.load(path, map_location=self.device))
         print(f"[FeaturePipeline] Checkpoint loaded from {path}")
@@ -167,7 +172,6 @@ class FeaturePipeline:
         print("[FeaturePipeline] Transformer unfrozen.")
     
     def get_optimizer(self, lr: float = 1e-4):
-        """Get optimizer for trainable transformer parameters."""
         trainable_params = [p for p in self.encoder.parameters() if p.requires_grad]
         if not trainable_params:
             print("[FeaturePipeline] Warning: No trainable parameters in transformer")
