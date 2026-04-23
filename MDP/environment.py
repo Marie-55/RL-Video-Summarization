@@ -28,14 +28,13 @@ class VideoSummarizationEnv:
         self.step_count = 0
         self.patience_counter = 0
         self.policy_turn = 'H'
-        # self._prev_summary = set(self.state.selected_indices)
         
         return self._get_observation()
 
     def step_H(self, chosen_anchor: int) -> tuple:
         assert self.policy_turn == 'H'
         if chosen_anchor not in self.state.selected_indices:
-            raise ValueError("H-policy must select from current summary indices.")
+            raise ValueError("H-policy must select from current summary indices")
             
         self.state.anchor_idx = chosen_anchor
         self.policy_turn = 'V'
@@ -53,16 +52,17 @@ class VideoSummarizationEnv:
             self.patience_counter += 1
         else:
             self.patience_counter = 0
-            # self._prev_summary = set(self.state.selected_indices)
             
         self.policy_turn = 'H'
+        self.step_count += 1  
         
-        # Compute reward ONLY when summary changes or episode ends
-        reward = self.reward_fn.compute_total(self.contextual_features, self.state.selected_indices)
-        done = self.step_count >= self.config.max_steps or \
-               self.patience_counter >= self.config.stability_patience
+        # Compute reward only when summary changes or at each V step
+        reward = self.reward_fn.compute_total_reward(
+            self.contextual_features, self.state.selected_indices
+        )
+        done = (self.step_count >= self.config.max_steps or
+                self.patience_counter >= self.config.stability_patience)
                
-        self.step_count += 1
         return self._get_observation(), reward, done, {"action_type": "V", "changed": changed}
 
     def _get_observation(self) -> Dict[str, Any]:
