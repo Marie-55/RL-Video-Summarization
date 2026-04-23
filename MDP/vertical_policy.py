@@ -1,9 +1,6 @@
 ### in this file, we will implement the vertical policy that will find the neighbors of the anchor frame 
 ### and will select one of them to replace the anchor with or keep it 
 ### it is also a feedforward neural network that takes the state as an input and outputs the distribution of probabilities over the neighbors to be selected as the new anchor frame
-from state import State
-from reward import Reward
-from frame import Frame
 import torch
 import torch.nn as nn
 import numpy as np
@@ -36,6 +33,8 @@ class VerticalPolicy(nn.Module):
         candidates = [anchor_idx] + neighbor_indices  # Keep anchor is always an option
         
         cand_feats = torch.tensor(contextual_features[candidates], dtype=torch.float32)
+        # Move to the same device as the model
+        cand_feats = cand_feats.to(next(self.parameters()).device)
         logits = self.forward(cand_feats)
         dist = torch.distributions.Categorical(logits=logits)
         
