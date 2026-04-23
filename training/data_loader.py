@@ -8,33 +8,32 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 import random
+import os
 
 
-class VideoEmbeddingLoader:
-    """
-    Loads video embeddings from .npz files.
-    
-    Usage:
-        loader = VideoEmbeddingLoader(videos_dir='videos/embeddings_clip_vitl14')
-        videos = loader.load_category('Activity', num_videos=10)
-        features = loader.load_single_video(video_path)
-    """
-    
+class VideoEmbeddingLoader:    
     def __init__(self, videos_dir: str = 'videos/embeddings_clip_vitl14'):
         """
         Args:
-            videos_dir: Path to embeddings directory
+            videos_dir: Path to embeddings directory. Can be:
+                        - Relative path (default: 'videos/embeddings_clip_vitl14')
+                        - Absolute path
+                        - Can be overridden by VIDEOS_DIR environment variable
         """
-        self.videos_dir = Path(videos_dir)
-        if not self.videos_dir.exists():
-            raise FileNotFoundError(f"Videos directory not found: {self.videos_dir}")
+        # Check environment variable first (I added this for HPC environments)
+        if 'VIDEOS_DIR' in os.environ:
+            videos_dir = os.environ['VIDEOS_DIR']
+            print(f"[VideoEmbeddingLoader] Using VIDEOS_DIR from environment: {videos_dir}")
+        
+        self.videos_dir = Path(videos_dir).expanduser().resolve()
         
         # Scan available categories
         self.categories = [d.name for d in self.videos_dir.iterdir() if d.is_dir()]
         self.categories.sort()
         
         print(f"[VideoEmbeddingLoader] Found {len(self.categories)} categories")
-        print(f"[VideoEmbeddingLoader] Categories: {', '.join(self.categories[:5])}...")
+        print(f"[VideoEmbeddingLoader] Categories: {', '.join(self.categories)}")
+        print(f"[VideoEmbeddingLoader] Videos directory: {self.videos_dir}")
     
     def get_categories(self) -> List[str]:
         """Get list of available categories."""
@@ -50,26 +49,17 @@ class VideoEmbeddingLoader:
         videos.sort()
         return videos
     
-    def load_single_video(self, video_path: str) -> np.ndarray:
-        """
-        Load embeddings for a single video.
-        
-        Args:
-            video_path: Path to .npz file (relative to videos_dir or absolute)
-            
-        Returns:
-            embeddings: (T, 768) numpy array of CLIP embeddings
-        """
+    def load_single_video(self, video_path) -> np.ndarray:
         path = Path(video_path)
         
-        # Handle relative paths
-        if not path.is_absolute():
-            path = self.videos_dir / path
+        if not path.is_absolute() and not path.exists():
+            candidate = self.videos_dir / path
+            if candidate.exists():
+                path = candidate
         
         if not path.exists():
             raise FileNotFoundError(f"Video file not found: {path}")
         
-        # Load .npz file
         data = np.load(path)
         embeddings = data['embeddings']  # (T, 768)
         
@@ -82,7 +72,7 @@ class VideoEmbeddingLoader:
         shuffle: bool = True,
     ) -> List[np.ndarray]:
         """
-        Load embeddings for all (or specified number of) videos in a category.
+        Load embeddings for all (or a specified number of) videos in a category.
         
         Args:
             category: Category name
@@ -104,8 +94,8 @@ class VideoEmbeddingLoader:
         for video_name in videos:
             video_path = self.videos_dir / category / video_name
             try:
-                embeddings = self.load_single_video(video_path)
-                embeddings_list.append(embeddings)
+                data = np.load(video_path)
+                embeddings_list.append(data['embeddings'].astype(np.float32))
             except Exception as e:
                 print(f"[Warning] Failed to load {video_name}: {e}")
         
@@ -117,16 +107,6 @@ class VideoEmbeddingLoader:
         num_videos_per_category: Optional[int] = None,
         shuffle: bool = True,
     ) -> Dict[str, List[np.ndarray]]:
-        """
-        Load embeddings from all categories.
-        
-        Args:
-            num_videos_per_category: If specified, load only this many videos per category
-            shuffle: Whether to shuffle video order within each category
-            
-        Returns:
-            Dictionary: category_name -> list of embedding arrays
-        """
         all_data = {}
         for category in self.categories:
             all_data[category] = self.load_category(
@@ -150,11 +130,12 @@ class VideoEmbeddingLoader:
         lengths = []
         
         for video_name in videos:
+            # FIX: same path doubling fix as in load_category
             video_path = self.videos_dir / category / video_name
             try:
-                embeddings = self.load_single_video(video_path)
-                lengths.append(embeddings.shape[0])
-            except:
+                data = np.load(video_path)
+                lengths.append(data['embeddings'].shape[0])
+            except Exception:
                 pass
         
         if not lengths:
@@ -162,7 +143,7 @@ class VideoEmbeddingLoader:
                 'num_videos': 0,
                 'min_length': 0,
                 'max_length': 0,
-                'avg_length': 0,
+                'avg_length': 0.0,
             }
         
         return {
@@ -171,32 +152,3 @@ class VideoEmbeddingLoader:
             'max_length': max(lengths),
             'avg_length': sum(lengths) / len(lengths),
         }
-
-
-if __name__ == "__main__":
-    # Test the loader
-    loader = VideoEmbeddingLoader()
-    
-    print("\n" + "=" * 60)
-    print("AVAILABLE CATEGORIES")
-    print("=" * 60)
-    categories = loader.get_categories()
-    for i, cat in enumerate(categories[:10]):
-        stats = loader.get_statistics(cat)
-        print(f"{i+1}. {cat}")
-        print(f"   Videos: {stats['num_videos']}, Length: {stats['min_length']}-{stats['max_length']} frames")
-    
-    print("\n" + "=" * 60)
-    print("LOADING SAMPLE VIDEO")
-    print("=" * 60)
-    
-    # Load a sample video
-    sample_category = 'Activity'
-    videos = loader.list_videos_in_category(sample_category)
-    sample_video = videos[0]
-    
-    embeddings = loader.load_single_video(f"{sample_category}/{sample_video}")
-    print(f"Video: {sample_video}")
-    print(f"Embeddings shape: {embeddings.shape}")
-    print(f"Embedding dtype: {embeddings.dtype}")
-    print(f"Sample: {embeddings[0, :5]}")
