@@ -1,10 +1,10 @@
 ## in this file , we will define the reward class that computes the reward for a given state , the reward will be computed using the frames in the summary 
-## it will include the diversity reward and the representative reward along with the temporal reward 
+## it will include the diversity reward and the representative reward
 ## in this file we will define the state class , that is a set of frames that represents the state of the summary at a given time 
 # reward.py
 import numpy as np
 from typing import Set
-from state import State
+
 
 class Reward:
     def __init__(self, w_div: float = 0.5, w_rep: float = 0.5):
