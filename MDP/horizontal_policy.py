@@ -1,12 +1,10 @@
-### In this section, we will define the horizontal policy class that will be a feedforward neural network that takes 
-### the state as an input and outputs the distribution of probabilities over the frames within the summary(state) to be 
-### selected as the anchor frame 
+### Horizontal policy: feedforward network that selects an anchor frame
+### from within the current summary.
 
 import torch
 import torch.nn as nn
 from typing import List, Tuple
-import numpy as np
-import state as State
+
 
 class HorizontalPolicy(nn.Module):
     def __init__(self, d_model: int, hidden_size: int):
