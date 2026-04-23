@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import math
 import numpy as np
-from typing import Optional
+from typing import Optional, Union
 
 
 class PositionalEncoding(nn.Module):
@@ -55,9 +55,6 @@ class InputProjection(nn.Module):
     """
     Projects CNN features (768-dim for CLIP ViT-L/14) down to d_model (512-dim).
     Required because input_dim (768) != d_model (512).
-
-    Without this, the Transformer would crash — it expects
-    vectors of exactly d_model dimensions as input.
 
     Architecture:
         Linear(768 → 512)
@@ -101,16 +98,6 @@ class TemporalTransformerEncoder(nn.Module):
         num_layers  = 3     (same depth as TR-SUM)
         dim_feedfwd = 2048  (4 × d_model)
         dropout     = 0.1
-
-    Args:
-        input_dim   : CNN feature dimension (default: 768 for CLIP ViT-L/14)
-        d_model     : transformer hidden dimension (default: 512)
-        nhead       : number of attention heads (default: 8)
-        num_layers  : number of stacked encoder layers (default: 3)
-        dim_feedfwd : FFN hidden size (default: 2048 = 4 × d_model)
-        dropout     : dropout rate (default: 0.1)
-        max_len     : maximum sequence length (default: 5000)
-        freeze      : if True, freeze all params
     """
     def __init__(
         self,
@@ -131,27 +118,27 @@ class TemporalTransformerEncoder(nn.Module):
         self.input_dim  = input_dim
         self.num_layers = num_layers
 
-        # 1. Project 768 → 512 (required since input_dim != d_model)
+        # 1. Project 768 → 512
         self.input_proj = InputProjection(
             input_dim = input_dim,
             d_model   = d_model,
         )
 
-        # 2. Add temporal positional encoding: x = x + positional_encoding
+        # 2. Add temporal positional encoding
         self.pos_enc = PositionalEncoding(
             d_model = d_model,
             max_len = max_len,
             dropout = dropout,
         )
 
-        # 3. Stack of 3 Transformer encoder layers
+        # 3. Stack of Transformer encoder layers
         encoder_layer = nn.TransformerEncoderLayer(
             d_model         = d_model,
             nhead           = nhead,
             dim_feedforward = dim_feedfwd,
             dropout         = dropout,
-            batch_first     = True,  # (B, T, d_model)
-            norm_first      = True,  # pre-norm: more stable training
+            batch_first     = True,   # (B, T, d_model)
+            norm_first      = True,   # pre-norm: more stable training
         )
         self.transformer = nn.TransformerEncoder(
             encoder_layer,
@@ -159,18 +146,17 @@ class TemporalTransformerEncoder(nn.Module):
             norm       = nn.LayerNorm(d_model),
         )
 
-        # 4. Optional freeze for RL integration
         if freeze:
             self.freeze()
 
     def freeze(self):
-        """Freeze all parameters — call before connecting to RL agent."""
+        """Freeze all parameters."""
         for p in self.parameters():
             p.requires_grad = False
         print("[TemporalEncoder] All parameters frozen.")
 
     def unfreeze(self):
-        """Unfreeze all parameters — call to resume end-to-end training."""
+        """Unfreeze all parameters."""
         for p in self.parameters():
             p.requires_grad = True
         print("[TemporalEncoder] All parameters unfrozen.")
@@ -184,42 +170,39 @@ class TemporalTransformerEncoder(nn.Module):
         Main encoding interface.
 
         Args:
-            features     : (B, T, 768) — precomputed CNN features (CLIP embeddings)
+            features     : (B, T, 768) — precomputed CLIP embeddings
             padding_mask : (B, T) bool, True = padded position to ignore
 
         Returns:
             contextual_features: (B, T, 512)
         """
-        # Step 1: Project 768 → 512
-        x = self.input_proj(features)  # (B, T, 512)
-
-        # Step 2: x = x + positional_encoding
-        x = self.pos_enc(x)  # (B, T, 512)
-
-        # Step 3: Self-attention across all frames
+        x = self.input_proj(features)           # (B, T, 512)
+        x = self.pos_enc(x)                     # (B, T, 512)
         contextual_features = self.transformer(
             x,
             src_key_padding_mask=padding_mask,  # (B, T) or None
-        )  # (B, T, 512)
-
+        )                                       # (B, T, 512)
         return contextual_features
 
     def forward(self, features, padding_mask=None):
         return self.encode(features, padding_mask)
 
 
-def pad_and_mask(feature_list: list, d_input: int = 768):
+def pad_and_mask(
+    feature_list: list,
+    d_input: int = 768,
+):
     """
     Pads a batch of variable-length videos to the same T
     and builds a padding mask.
 
     Args:
-        feature_list : list of tensors, each (T_i, 768)
-        d_input      : CNN feature dimension (768 for CLIP ViT-L/14)
+        feature_list : list of tensors OR numpy arrays, each (T_i, d_input)
+        d_input      : feature dimension (768 for CLIP ViT-L/14)
 
     Returns:
-        padded : (B, T_max, 768)
-        mask   : (B, T_max) — True = padded (ignore this position)
+        padded : (B, T_max, d_input) torch.FloatTensor
+        mask   : (B, T_max) torch.BoolTensor — True = padded (ignore position)
     """
     B     = len(feature_list)
     T_max = max(f.shape[0] for f in feature_list)
@@ -229,6 +212,11 @@ def pad_and_mask(feature_list: list, d_input: int = 768):
 
     for i, f in enumerate(feature_list):
         T_i = f.shape[0]
+        # FIX: convert numpy arrays to torch tensors before assignment.
+        # Previously, assigning a numpy array directly into a torch.zeros
+        # tensor raised: TypeError: can't assign a numpy.ndarray to a torch.FloatTensor
+        if isinstance(f, np.ndarray):
+            f = torch.from_numpy(f).float()
         padded[i, :T_i, :] = f
         mask[i, :T_i] = False  # real frames → attend
 
