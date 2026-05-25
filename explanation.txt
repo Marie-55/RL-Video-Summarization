@@ -1,0 +1,3 @@
+⚠️ One Issue: d_model choice matters more than you think
+In DR-DSN, the BiLSTM hidden dim is 256 (forward 128 + backward 128 = 256 concat). When you replace it with a Transformer, the equivalent d_model should be 256 or 512, NOT 1024 — unless you skip the input projection (like TR-SUM does).
+Your Cell 7 uses d_model=512 with a projection layer from 1024 → 512. This is fine, but you should be consistent. Here's the recommended config to match the DR-DSN spirit with a Transformer:
