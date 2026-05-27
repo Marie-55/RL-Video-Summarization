@@ -31,3 +31,5 @@ class Config:
     lr: float = 1e-3
     gamma: float = 1.0           # Discount factor for REINFORCE returns
     seed: int = 42
+
+    
